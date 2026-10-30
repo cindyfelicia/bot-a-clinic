@@ -39,6 +39,21 @@ NOTE_TOOL = {
     },
 }
 
+TASK_TOOL = {
+    "name": "record_task",
+    "description": "Create a task from the user's text.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {**_STR, "description": "Short imperative task title, max ~80 chars."},
+            "due": {**_STR, "description": "YYYY-MM-DD if a due date is stated or clearly implied (use today's date given), else empty string."},
+            "priority": {"type": "string", "enum": ["High", "Medium", "Low", ""]},
+            "notes": {**_STR, "description": "Any extra detail worth keeping, or empty string."},
+        },
+        "required": ["title", "due", "priority", "notes"],
+    },
+}
+
 SYSTEM = (
     "You maintain the A Clinic project log for a web/mobile dev team. The user pastes raw, messy "
     "notes. Extract them into the tool's fields. Rules: be concise and faithful; never invent facts, "
@@ -78,3 +93,6 @@ class Summarizer:
 
     async def note(self, text: str) -> dict:
         return await self._extract(NOTE_TOOL, text)
+
+    async def task(self, text: str, today: str) -> dict:
+        return await self._extract(TASK_TOOL, f"Today's date: {today}\n{text}")

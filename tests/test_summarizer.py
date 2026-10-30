@@ -34,3 +34,10 @@ def test_note_has_no_previous_context():
     out = asyncio.run(sm.note("client wants X"))
     assert "<previous_entry>" not in sm.client.messages.kwargs["messages"][0]["content"]
     assert out["status"] == "status"
+
+
+def test_task_includes_today():
+    sm = make()
+    out = asyncio.run(sm.task("fix login by friday", "2026-10-30"))
+    assert "2026-10-30" in sm.client.messages.kwargs["messages"][0]["content"]
+    assert out["title"] == "title"

@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from sheets import SheetsClient  # noqa: E402  (after load_dotenv so env is populated)
+from notion import NotionTasks  # noqa: E402
 from summarizer import Summarizer  # noqa: E402
 
 PREFIX = os.getenv("COMMAND_PREFIX", "!aclinic")
@@ -23,6 +24,7 @@ bot = commands.Bot(command_prefix=PREFIX + " ", intents=intents, help_command=No
 
 sheets: SheetsClient | None = None
 summarizer: Summarizer | None = None
+notion: NotionTasks | None = None
 
 
 def today() -> str:
@@ -36,8 +38,9 @@ def clip(s: str, n: int = 1000) -> str:
 class ConfirmView(discord.ui.View):
     """Preview → Save / Cancel. Only the author can press; nothing hits the sheet until Save."""
 
-    def __init__(self, author: discord.abc.User, save_coro, done_embed_fn):
+    def __init__(self, author: discord.abc.User, save_coro, done_embed_fn, label: str = "Save to sheet"):
         super().__init__(timeout=CONFIRM_TIMEOUT)
+        self.save.label = label
         self.author = author
         self.save_coro = save_coro
         self.done_embed_fn = done_embed_fn
@@ -103,7 +106,7 @@ async def only_allowed_channel(ctx: commands.Context) -> bool:
 
 @bot.event
 async def on_ready():
-    print(f"Bot ready: {bot.user} | prefix: '{PREFIX} <update|note|status>'")
+    print(f"Bot ready: {bot.user} | prefix: '{PREFIX} <update|note|task|status>'")
 
 
 @bot.event
@@ -171,6 +174,46 @@ async def note(ctx: commands.Context, *, raw: str):
     )
 
 
+def task_embed(t: dict, title: str, color: int, footer: str, url: str = "") -> discord.Embed:
+    e = discord.Embed(title=title, color=color, url=url or None)
+    e.add_field(name="✔️ Task", value=clip(t["title"]), inline=False)
+    e.add_field(name="📅 Due", value=t["due"] or "-", inline=True)
+    e.add_field(name="🔥 Priority", value=t["priority"] or "-", inline=True)
+    if t["notes"]:
+        e.add_field(name="🗒️ Notes", value=clip(t["notes"]), inline=False)
+    e.set_footer(text=footer)
+    return e
+
+
+@bot.command(name="task")
+async def task(ctx: commands.Context, *, raw: str):
+    """Describe a task in plain words; Claude structures it and creates it in Notion."""
+    if notion is None:
+        await ctx.reply("Notion isn't configured (set `NOTION_TOKEN` and `NOTION_DATABASE_ID`).")
+        return
+    async with ctx.typing():
+        try:
+            t = await summarizer.task(raw, today())
+        except Exception as e:
+            await ctx.reply(f"❌ Couldn't parse the task: `{e}`")
+            return
+
+    async def save() -> str:
+        return await asyncio.to_thread(
+            notion.create_task, t["title"], t["due"], t["priority"], "", f"{t['notes']}\n\nCreated from Discord by {ctx.author.display_name}".strip()
+        )
+
+    view = ConfirmView(
+        ctx.author, save,
+        lambda url: task_embed(t, "✅ Task Created in Notion", 0x00C49A, f"Added by {ctx.author.display_name}", url),
+        label="Create in Notion",
+    )
+    view.message = await ctx.reply(
+        embed=task_embed(t, "📝 Preview — Notion Task", 0xF59E0B, "Nothing is created until you press the button"),
+        view=view,
+    )
+
+
 @bot.command(name="status")
 async def status(ctx: commands.Context):
     """Show the latest Daily Summary row."""
@@ -188,9 +231,11 @@ async def status(ctx: commands.Context):
 
 
 def main():
-    global sheets, summarizer
+    global sheets, summarizer, notion
     sheets = SheetsClient(os.environ["SPREADSHEET_ID"])
     summarizer = Summarizer()
+    if os.getenv("NOTION_TOKEN") and os.getenv("NOTION_DATABASE_ID"):
+        notion = NotionTasks(os.environ["NOTION_TOKEN"], os.environ["NOTION_DATABASE_ID"])
     bot.run(os.environ["DISCORD_TOKEN"])
 
 
